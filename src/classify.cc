@@ -123,7 +123,7 @@ int main(int argc, char **argv) {
 
   cerr << "Loading database information...";
 
-  IndexOptions idx_opts = {0};
+  IndexOptions idx_opts = {0, 0, 0, 0, 0, 0, 0};
   ifstream idx_opt_fs(opts.options_filename);
   idx_opt_fs.read((char *) &idx_opts, sizeof(idx_opts));
   opts.use_translated_search = ! idx_opts.dna_db;
@@ -695,6 +695,7 @@ void InitializeOutputs(Options &opts, OutputStreamData &outputs, SequenceFormat/
   {
     if (! outputs.initialized) {
       if (! opts.classified_output_filename.empty()) {
+        int outcomp = 0;
         if(compression_level == 0) {
             if(opts.classified_output_filename.find(".gz") != std::string::npos)
                 outcomp = 6;
