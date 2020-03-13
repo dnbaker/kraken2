@@ -14,6 +14,7 @@
 #include "aa_translate.h"
 #include "reports.h"
 #include "utilities.h"
+#include "zlib.h"
 
 using std::cout;
 using std::cerr;
@@ -52,6 +53,7 @@ struct Options {
   int minimum_quality_score;
   int minimum_hit_groups;
   bool use_memory_mapping;
+  int zlib_compression_level;
 };
 
 struct ClassificationStats {
@@ -63,11 +65,11 @@ struct ClassificationStats {
 struct OutputStreamData {
   bool initialized;
   bool printing_sequences;
-  std::ostream *classified_output1;
-  std::ostream *classified_output2;
-  std::ostream *unclassified_output1;
-  std::ostream *unclassified_output2;
-  std::ostream *kraken_output;
+  gzFile classified_output1;
+  gzFile classified_output2;
+  gzFile unclassified_output1;
+  gzFile unclassified_output2;
+  gzFile kraken_output;
 };
 
 struct OutputData {
@@ -96,7 +98,7 @@ taxid_t ResolveTree(taxon_counts_t &hit_counts,
     Taxonomy &tax, size_t total_minimizers, Options &opts);
 void ReportStats(struct timeval time1, struct timeval time2,
     ClassificationStats &stats);
-void InitializeOutputs(Options &opts, OutputStreamData &outputs, SequenceFormat format);
+void InitializeOutputs(Options &opts, OutputStreamData &outputs, SequenceFormat format, int level=0);
 void MaskLowQualityBases(Sequence &dna, int minimum_quality_score);
 
 int main(int argc, char **argv) {
@@ -113,6 +115,7 @@ int main(int argc, char **argv) {
   opts.minimum_quality_score = 0;
   opts.minimum_hit_groups = 0;
   opts.use_memory_mapping = false;
+  opts.zlib_compression_level = 0;
 
   ParseCommandLine(argc, argv, opts);
 
@@ -133,7 +136,7 @@ int main(int argc, char **argv) {
   ClassificationStats stats = {0, 0, 0};
   taxon_counts_t call_counts;
 
-  OutputStreamData outputs = { false, false, nullptr, nullptr, nullptr, nullptr, &std::cout };
+  OutputStreamData outputs = { false, false, nullptr, nullptr, nullptr, nullptr, nullptr };
 
   struct timeval tv1, tv2;
   gettimeofday(&tv1, nullptr);
@@ -391,6 +394,7 @@ void ProcessFiles(const char *filename1, const char *filename2,
           break;
         // Past this point in loop, we know lock is set
 
+#if 0
         if (outputs.kraken_output != nullptr)
           (*outputs.kraken_output) << out_data.kraken_str;
         if (outputs.classified_output1 != nullptr)
@@ -401,6 +405,13 @@ void ProcessFiles(const char *filename1, const char *filename2,
           (*outputs.unclassified_output1) << out_data.unclassified_out1_str;
         if (outputs.unclassified_output2 != nullptr)
           (*outputs.unclassified_output2) << out_data.unclassified_out2_str;
+#else
+        if(outputs.kraken_output) gzwrite(outputs.kraken_output, out_data.kraken_str.data(), out_data.kraken_str.size());
+        if(outputs.classified_output1) gzwrite(outputs.classified_output1, out_data.kraken_str.data(), out_data.kraken_str.size());
+        if(outputs.classified_output2) gzwrite(outputs.classified_output2, out_data.kraken_str.data(), out_data.kraken_str.size());
+        if(outputs.unclassified_output1) gzwrite(outputs.unclassified_output1, out_data.kraken_str.data(), out_data.kraken_str.size());
+        if(outputs.unclassified_output2) gzwrite(outputs.unclassified_output2, out_data.kraken_str.data(), out_data.kraken_str.size());
+#endif
         omp_unset_lock(&output_lock);
       }  // end while output loop
     }  // end while
@@ -410,6 +421,7 @@ void ProcessFiles(const char *filename1, const char *filename2,
     delete fptr1;
   if (fptr2 != nullptr)
     delete fptr2;
+#if 0
   if (outputs.kraken_output != nullptr)
     (*outputs.kraken_output) << std::flush;
   if (outputs.classified_output1 != nullptr)
@@ -420,6 +432,18 @@ void ProcessFiles(const char *filename1, const char *filename2,
     (*outputs.unclassified_output1) << std::flush;
   if (outputs.unclassified_output2 != nullptr)
     (*outputs.unclassified_output2) << std::flush;
+#else
+   if(outputs.kraken_output) gzclose(outputs.kraken_output);
+   if(outputs.classified_output1) gzclose(outputs.classified_output1);
+   if(outputs.classified_output2) gzclose(outputs.classified_output2);
+   if(outputs.unclassified_output1) gzclose(outputs.unclassified_output1);
+   if(outputs.unclassified_output2) gzclose(outputs.unclassified_output2);
+   delete outputs.kraken_output;
+   delete outputs.classified_output1;
+   delete outputs.classified_output2;
+   delete outputs.unclassified_output1;
+   delete outputs.unclassified_output2;
+#endif
 }
 
 taxid_t ResolveTree(taxon_counts_t &hit_counts,
@@ -658,11 +682,24 @@ void AddHitlistString(ostringstream &oss, vector<taxid_t> &taxa,
   }
 }
 
-void InitializeOutputs(Options &opts, OutputStreamData &outputs, SequenceFormat format) {
+gzFile outgzopen(std::string fn, int compression=0) {
+    std::string level;
+    if(compression) {
+        level = std::string("wb") + std::to_string(compression);
+    } else level = "wT";
+    return gzopen(fn.data(), level.data());
+}
+
+void InitializeOutputs(Options &opts, OutputStreamData &outputs, SequenceFormat/*UNUSED*/, int compression_level) {
   #pragma omp critical(output_init)
   {
     if (! outputs.initialized) {
       if (! opts.classified_output_filename.empty()) {
+        int outcomp = 0;
+        if(compression_level == 0) {
+            if(opts.classified_output_filename.find(".gz") != std::string::npos)
+                outcomp = 6;
+        } else outcomp = compression_level;
         if (opts.paired_end_processing) {
           vector<string> fields = SplitString(opts.classified_output_filename, "#", 3);
           if (fields.size() < 2) {
@@ -673,14 +710,19 @@ void InitializeOutputs(Options &opts, OutputStreamData &outputs, SequenceFormat 
             errx(EX_DATAERR, "Paired filename format has >1 # character: %s",
                  opts.classified_output_filename.c_str());
           }
-          outputs.classified_output1 = new ofstream(fields[0] + "_1" + fields[1]);
-          outputs.classified_output2 = new ofstream(fields[0] + "_2" + fields[1]);
+          outputs.classified_output1 = outgzopen(fields[0] + "_1" + fields[1], outcomp);
+          outputs.classified_output2 = outgzopen(fields[0] + "_2" + fields[1], outcomp);
         }
         else
-          outputs.classified_output1 = new ofstream(opts.classified_output_filename);
+          outputs.classified_output1 = outgzopen(opts.classified_output_filename, outcomp);
         outputs.printing_sequences = true;
       }
       if (! opts.unclassified_output_filename.empty()) {
+        int outcomp = 0;
+        if(compression_level == 0) {
+            if(opts.unclassified_output_filename.find(".gz") != std::string::npos)
+                outcomp = 6;
+        } else outcomp = compression_level;
         if (opts.paired_end_processing) {
           vector<string> fields = SplitString(opts.unclassified_output_filename, "#", 3);
           if (fields.size() < 2) {
@@ -691,18 +733,25 @@ void InitializeOutputs(Options &opts, OutputStreamData &outputs, SequenceFormat 
             errx(EX_DATAERR, "Paired filename format has >1 # character: %s",
                  opts.unclassified_output_filename.c_str());
           }
-          outputs.unclassified_output1 = new ofstream(fields[0] + "_1" + fields[1]);
-          outputs.unclassified_output2 = new ofstream(fields[0] + "_2" + fields[1]);
+          outputs.unclassified_output1 = outgzopen(fields[0] + "_1" + fields[1], outcomp);
+          outputs.unclassified_output2 = outgzopen(fields[0] + "_2" + fields[1], outcomp);
         }
         else
-          outputs.unclassified_output1 = new ofstream(opts.unclassified_output_filename);
+          outputs.unclassified_output1 = outgzopen(opts.unclassified_output_filename, outcomp);
         outputs.printing_sequences = true;
       }
       if (! opts.kraken_output_filename.empty()) {
+        int outcomp = 0;
+        if(compression_level == 0) {
+            if(opts.kraken_output_filename.find(".gz") != std::string::npos)
+                outcomp = 6;
+        } else outcomp = compression_level;
         if (opts.kraken_output_filename == "-")  // Special filename to silence Kraken output
           outputs.kraken_output = nullptr;
         else
-          outputs.kraken_output = new ofstream(opts.kraken_output_filename);
+          outputs.kraken_output = outgzopen(opts.kraken_output_filename);
+      } else {
+          outputs.kraken_output = outgzopen("/dev/stdout", 0);
       }
       outputs.initialized = true;
     }
@@ -724,11 +773,12 @@ void MaskLowQualityBases(Sequence &dna, int minimum_quality_score) {
 void ParseCommandLine(int argc, char **argv, Options &opts) {
   int opt;
 
-  while ((opt = getopt(argc, argv, "h?H:t:o:T:p:R:C:U:O:Q:g:nmzqPSM")) != -1) {
+  while ((opt = getopt(argc, argv, "h?H:t:o:T:p:R:C:U:O:Q:g:l:nmzqPSM")) != -1) {
     switch (opt) {
       case 'h' : case '?' :
         usage(0);
         break;
+      case 'l': opts.zlib_compression_level = std::atoi(optarg); break;
       case 'H' :
         opts.index_filename = optarg;
         break;

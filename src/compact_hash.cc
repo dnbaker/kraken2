@@ -29,7 +29,7 @@ CompactHashTable::CompactHashTable(size_t capacity,
   size_ = 0;
   try {
     table_ = new CompactHashCell[capacity_];
-  } catch (std::bad_alloc ex) {
+  } catch (const std::bad_alloc &ex) {
     std::cerr << "Failed attempt to allocate " << (sizeof(*table_) * capacity_) << "bytes;\n"
               << "you may not have enough free memory to build this database.\n"
               << "Perhaps increasing the k-mer length, or reducing memory usage from\n"
@@ -177,13 +177,15 @@ bool CompactHashTable::CompareAndSet
 // Linear probing leads to more clustering, longer probing paths, and
 //   higher probability of a false answer
 // Double hashing can have shorter probing paths, but less cache efficiency
-inline uint64_t CompactHashTable::second_hash(uint64_t first_hash) {
 #ifdef LINEAR_PROBING
+inline uint64_t CompactHashTable::second_hash(uint64_t) {
   return 1;
-#else  // Double hashing
-  return (first_hash >> 8) | 1;
-#endif
 }
+#else
+inline uint64_t CompactHashTable::second_hash(uint64_t first_hash) {
+  return (first_hash >> 8) | 1;
+}
+#endif
 
 taxon_counts_t CompactHashTable::GetValueCounts() {
   taxon_counts_t value_counts;

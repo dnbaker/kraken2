@@ -51,7 +51,7 @@ class Taxonomy {
   inline const TaxonomyNode *nodes() const { return nodes_; }
   inline const char *name_data() const { return name_data_; }
   inline const char *rank_data() const { return rank_data_; }
-  inline const size_t node_count() { return node_count_; }
+  inline size_t node_count() { return node_count_; }
 
   bool IsAAncestorOfB(uint64_t a, uint64_t b);
   uint64_t LowestCommonAncestor(uint64_t a, uint64_t b);
