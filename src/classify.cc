@@ -695,7 +695,6 @@ void InitializeOutputs(Options &opts, OutputStreamData &outputs, SequenceFormat/
   {
     if (! outputs.initialized) {
       if (! opts.classified_output_filename.empty()) {
-        int outcomp = 0;
         if(compression_level == 0) {
             if(opts.classified_output_filename.find(".gz") != std::string::npos)
                 outcomp = 6;
@@ -749,7 +748,7 @@ void InitializeOutputs(Options &opts, OutputStreamData &outputs, SequenceFormat/
         if (opts.kraken_output_filename == "-")  // Special filename to silence Kraken output
           outputs.kraken_output = nullptr;
         else
-          outputs.kraken_output = outgzopen(opts.kraken_output_filename);
+          outputs.kraken_output = outgzopen(opts.kraken_output_filename, outcomp);
       } else {
           outputs.kraken_output = outgzopen("/dev/stdout", 0);
       }
